@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Notes</title>
+  <!-- PDF.js for rendering PDFs -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <!-- jsPDF for exporting annotated PDFs -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --panel: #1e293b;
+      --text: #f8fafc;
+      --accent: #38bdf8;
+      --border: #334155;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; -webkit-user-select: none; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, sans-serif;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    /* Top Toolbar */
+    .toolbar {
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+      padding: 8px 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      z-index: 10;
+    }
+    .app-title {
+      font-weight: 700;
+      font-size: 1.1rem;
+      color: var(--accent);
+      margin-right: 6px;
+    }
+    button, .file-btn {
+      background: #334155;
+      color: var(--text);
+      border: 1px solid #475569;
+      padding: 7px 11px;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    button.active {
+      background: var(--accent);
+      color: #0f172a;
+      border-color: var(--accent);
+      font-weight: 600;
+    }
+    input[type="color"] {
+      width: 32px;
+      height: 32px;
+      border: none;
+      background: none;
+      cursor: pointer;
+    }
+    input[type="range"] { width: 75px; }
+    .divider { width: 1px; height: 24px; background: var(--border); margin: 0 4px; }
+    .timer-box {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: #0f172a;
+      padding: 4px 10px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      font-variant-numeric: tabular-nums;
+      font-size: 0.85rem;
+    }
+    /* Workspace */
+    .workspace {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 24px;
+    }
+    .page-container {
+      position: relative;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+      background: #fff;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .pdf-canvas {
+      display: block;
+    }
+    .draw-canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      touch-action: none;
+      cursor: crosshair;
+    }
+    .invert-filter .pdf-canvas {
+      filter: invert(0.9) hue-rotate(180deg);
+    }
+    .page-badge {
+      position: absolute;
+      bottom: 8px;
+      right: 10px;
+      background: rgba(15, 23, 42, 0.75);
+      color: #fff;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      pointer-events: none;
+    }
+    .empty-state {
+      margin: auto;
+      text-align: center;
+      color: #94a3b8;
+      max-width: 360px;
+    }
+    .empty-state h2 { color: #f8fafc; margin-bottom: 8px; }
+  </style>
+</head>
+<body>
+
+  <div class="toolbar">
+    <span class="app-title">Notes</span>
+
+    <label class="file-btn">
+      📂 Open PDF
+      <input type="file" id="file-input" accept="application/pdf" hidden />
+    </label>
+    <button id="add-blank-btn" title="Add Blank Calculation Page">➕ Blank Page</button>
+
+    <div class="divider"></div>
+
+    <button id="tool-scroll" class="active">✋ Scroll</button>
+    <button id="tool-pen">✏️ Pen</button>
+    <button id="tool-highlight">🖍️ Highlight</button>
+    <button id="tool-text">🔤 Text</button>
+    <button id="tool-eraser">🧹 Eraser</button>
+
+    <input type="color" id="color-picker" value="#ef4444" title="Ink Color" />
+    <input type="range" id="stroke-size" min="1" max="25" value="3" title="Brush Size" />
+
+    <div class="divider"></div>
+
+    <button id="invert-btn" title="Dark Mode PDF">🌙 Invert</button>
+    <button id="export-btn" title="Save Annotated PDF">💾 Save PDF</button>
+
+    <div class="timer-box">
+      <span id="timer-display">25:00</span>
+      <button id="timer-toggle" style="padding: 3px 7px;">▶️</button>
+    </div>
+  </div>
+
+  <div class="workspace" id="workspace">
+    <div class="empty-state" id="empty-state">
+      <h2>Welcome to Notes</h2>
+      <p>Tap <strong>Open PDF</strong> to load any PDF from your tablet, or tap <strong>+ Blank Page</strong> to start a fresh scratchpad.</p>
+    </div>
+  </div>
+
+  <script>
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+    const workspace = document.getElementById('workspace');
+    const emptyState = document.getElementById('empty-state');
+    const colorPicker = document.getElementById('color-picker');
+    const strokeSize = document.getElementById('stroke-size');
+
+    let currentTool = 'scroll'; // scroll | pen | highlight | text | eraser
+    let pageList = [];
+    let scale = 1.4;
+
+    // Tool selector
+    const tools = ['scroll', 'pen', 'highlight', 'text', 'eraser'];
+    tools.forEach(t => {
+      document.getElementById(`tool-${t}`).addEventListener('click', () => {
+        currentTool = t;
+        tools.forEach(btn => document.getElementById(`tool-${btn}`).classList.toggle('active', btn === t));
+        updateTouchAction();
+      });
+    });
+
+    function updateTouchAction() {
+      document.querySelectorAll('.draw-canvas').forEach(c => {
+        c.style.touchAction = currentTool === 'scroll' ? 'pan-y' : 'none';
+      });
+    }
+
+    // Invert Mode
+    document.getElementById('invert-btn').addEventListener('click', (e) => {
+      workspace.classList.toggle('invert-filter');
+      e.currentTarget.classList.toggle('active');
+    });
+
+    // Load PDF from Tablet Storage
+    document.getElementById('file-input').addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      emptyState.style.display = 'none';
+      workspace.innerHTML = '';
+      pageList = [];
+
+      const arrayBuffer = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+
+      for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+        const page = await pdf.getPage(pageNum);
+        const viewport = page.getViewport({ scale });
+        const { pdfCanvas, drawCanvas } = createPageContainer(viewport.width, viewport.height, `Page ${pageNum}`);
+        await page.render({ canvasContext: pdfCanvas.getContext('2d'), viewport }).promise;
+        pageList.push({ pdfCanvas, drawCanvas });
+      }
+    });
+
+    // Add Blank Scratchpad Page
+    document.getElementById('add-blank-btn').addEventListener('click', () => {
+      emptyState.style.display = 'none';
+      const width = 794 * 1.1;
+      const height = 1123 * 1.1;
+      const { pdfCanvas, drawCanvas } = createPageContainer(width, height, `Scratchpad ${pageList.length + 1}`);
+      const ctx = pdfCanvas.getContext('2d');
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, width, height);
+      // Draw subtle dot grid
+      ctx.fillStyle = '#cbd5e1';
+      for (let x = 25; x < width; x += 25) {
+        for (let y = 25; y < height; y += 25) {
+          ctx.fillRect(x, y, 2, 2);
+        }
+      }
+      pageList.push({ pdfCanvas, drawCanvas });
+    });
+
+    function createPageContainer(width, height, label) {
+      const container = document.createElement('div');
+      container.className = 'page-container';
+      container.style.width = `${width}px`;
+      container.style.height = `${height}px`;
+
+      const pdfCanvas = document.createElement('canvas');
+      pdfCanvas.className = 'pdf-canvas';
+      pdfCanvas.width = width;
+      pdfCanvas.height = height;
+
+      const drawCanvas = document.createElement('canvas');
+      drawCanvas.className = 'draw-canvas';
+      drawCanvas.width = width;
+      drawCanvas.height = height;
+
+      const badge = document.createElement('div');
+      badge.className = 'page-badge';
+      badge.textContent = label;
+
+      attachDrawingEvents(drawCanvas);
+
+      container.appendChild(pdfCanvas);
+      container.appendChild(drawCanvas);
+      container.appendChild(badge);
+      workspace.appendChild(container);
+      updateTouchAction();
+
+      return { pdfCanvas, drawCanvas };
+    }
+
+    function attachDrawingEvents(canvas) {
+      const ctx = canvas.getContext('2d');
+      let drawing = false;
+      let lastX = 0, lastY = 0;
+
+      const getPos = (e) => {
+        const rect = canvas.getBoundingClientRect();
+        return {
+          x: (e.clientX - rect.left) * (canvas.width / rect.width),
+          y: (e.clientY - rect.top) * (canvas.height / rect.height)
+        };
+      };
+
+      canvas.addEventListener('pointerdown', (e) => {
+        if (currentTool === 'scroll') return;
+        const pos = getPos(e);
+
+        if (currentTool === 'text') {
+          const text = prompt('Enter note text:');
+          if (text) {
+            ctx.save();
+            ctx.globalCompositeOperation = 'source-over';
+            ctx.fillStyle = colorPicker.value;
+            ctx.font = `bold ${Math.max(16, strokeSize.value * 5)}px sans-serif`;
+            ctx.fillText(text, pos.x, pos.y);
+            ctx.restore();
+          }
+          return;
+        }
+
+        drawing = true;
+        lastX = pos.x;
+        lastY = pos.y;
+        canvas.setPointerCapture(e.pointerId);
+      });
+
+      canvas.addEventListener('pointermove', (e) => {
+        if (!drawing || currentTool === 'scroll') return;
+        const pos = getPos(e);
+        ctx.save();
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+
+        if (currentTool === 'eraser') {
+          ctx.globalCompositeOperation = 'destination-out';
+          ctx.lineWidth = strokeSize.value * 6;
+        } else if (currentTool === 'highlight') {
+          ctx.globalCompositeOperation = 'source-over';
+          ctx.strokeStyle = colorPicker.value + '33'; // translucent
+          ctx.lineWidth = Math.max(18, strokeSize.value * 4);
+        } else {
+          ctx.globalCompositeOperation = 'source-over';
+          ctx.strokeStyle = colorPicker.value;
+          ctx.lineWidth = strokeSize.value;
+        }
+
+        ctx.beginPath();
+        ctx.moveTo(lastX, lastY);
+        ctx.lineTo(pos.x, pos.y);
+        ctx.stroke();
+        ctx.restore();
+
+        lastX = pos.x;
+        lastY = pos.y;
+      });
+
+      canvas.addEventListener('pointerup', () => { drawing = false; });
+      canvas.addEventListener('pointercancel', () => { drawing = false; });
+    }
+
+    // Export Annotated PDF
+    document.getElementById('export-btn').addEventListener('click', () => {
+      if (pageList.length === 0) return alert('Open a PDF or add a blank page first.');
+      const { jsPDF } = window.jspdf;
+      const first = pageList[0].pdfCanvas;
+      const pdf = new jsPDF({
+        orientation: first.width > first.height ? 'l' : 'p',
+        unit: 'px',
+        format: [first.width, first.height]
+      });
+
+      pageList.forEach(({ pdfCanvas, drawCanvas }, idx) => {
+        if (idx > 0) {
+          pdf.addPage([pdfCanvas.width, pdfCanvas.height], pdfCanvas.width > pdfCanvas.height ? 'l' : 'p');
+        }
+        const merged = document.createElement('canvas');
+        merged.width = pdfCanvas.width;
+        merged.height = pdfCanvas.height;
+        const mCtx = merged.getContext('2d');
+        mCtx.drawImage(pdfCanvas, 0, 0);
+        mCtx.drawImage(drawCanvas, 0, 0);
+        const imgData = merged.toDataURL('image/jpeg', 0.92);
+        pdf.addImage(imgData, 'JPEG', 0, 0, pdfCanvas.width, pdfCanvas.height);
+      });
+
+      pdf.save('Notes-Annotated.pdf');
+    });
+
+    // Built-in 25-min Focus Timer
+    let timerSeconds = 25 * 60;
+    let timerId = null;
+    const timerDisplay = document.getElementById('timer-display');
+    const timerToggle = document.getElementById('timer-toggle');
+
+    timerToggle.addEventListener('click', () => {
+      if (timerId) {
+        clearInterval(timerId);
+        timerId = null;
+        timerToggle.textContent = '▶️';
+      } else {
+        timerToggle.textContent = '⏸️';
+        timerId = setInterval(() => {
+          if (timerSeconds > 0) {
+            timerSeconds--;
+            const m = String(Math.floor(timerSeconds / 60)).padStart(2, '0');
+            const s = String(timerSeconds % 60).padStart(2, '0');
+            timerDisplay.textContent = `${m}:${s}`;
+          } else {
+            clearInterval(timerId);
+            timerId = null;
+            timerSeconds = 25 * 60;
+            timerToggle.textContent = '▶️';
+            alert('Focus block complete!');
+          }
+        }, 1000);
+      }
+    });
+  </script>
+</body>
+</html>

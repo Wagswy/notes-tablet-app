@@ -18,27 +18,28 @@ jobs:
         with:
           node-version: 20
 
-      - name: Set up Java JDK 17 (Required for Android Gradle)
+      - name: Set up Java JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '17'
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+          java-version: '21'
 
       - name: Install Dependencies & Initialize Capacitor as "Notes"
         run: |
           npm install
-          npx cap init "Notes" "com.tablet.notes" --web-dir www
-          npx cap add android
+          if [ ! -f capacitor.config.json ] && [ ! -f capacitor.config.ts ]; then
+            npx cap init "Notes" "com.tablet.notes" --web-dir www
+          fi
+          if [ ! -d android ]; then
+            npx cap add android
+          fi
           npx cap sync android
 
       - name: Build Debug APK with Gradle
         working-directory: ./android
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug
+          ./gradlew assembleDebug --no-daemon
 
       - name: Upload Ready-to-Install APK
         uses: actions/upload-artifact@v4
